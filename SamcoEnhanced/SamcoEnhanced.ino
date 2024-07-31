@@ -14,7 +14,7 @@
  * @author [That One Seong](SeongsSeongs@gmail.com)
  * @date 2024
  */
-#define OPENFIRE_VERSION 5.0
+#define OPENFIRE_VERSION 5.1
 #define OPENFIRE_CODENAME "Heartful"
 
  // For custom builders, remember to check (COMPILING.md) for IDE instructions!
@@ -223,6 +223,13 @@ LightgunButtonsStatic<ButtonCount> lgbData;
 
 // button object instance
 LightgunButtons buttons(lgbData, ButtonCount);
+
+uint8_t pedalOrigButtonType1 = LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType;
+uint8_t pedalOrigButtonCode1 = LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode;
+uint8_t pedalOrigButtonType2 = LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType2;
+uint8_t pedalOrigButtonCode2 = LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode2;
+uint8_t pedalOrigButtonType3 = LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType3;
+uint8_t pedalOrigButtonCode3 = LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode3;
 
 // button combo to send an escape keypress
 uint32_t EscapeKeyBtnMask = BtnMask_Reload | BtnMask_Start;
@@ -532,8 +539,8 @@ void setup() {
 
     #ifdef ARDUINO_ADAFRUIT_ITSYBITSY_RP2040
         // SAMCO 1.1 needs Pin 5 normally HIGH for the camera
-        pinMode(5, OUTPUT);
-        digitalWrite(5, HIGH);
+        pinMode(14, OUTPUT);
+        digitalWrite(14, HIGH);
     #endif // ARDUINO_ADAFRUIT_ITSYBITSY_RP2040
 
     SamcoPreferences::LoadPresets();
@@ -1749,6 +1756,7 @@ void ExecCalMode()
     AbsMouse5.move(32768/2, 32768/2);
     // jack in, CaliMan, execute!!!
     SetMode(GunMode_Calibration);
+    Serial.printf("CalStage: %d\r\n", Cali_Init);
     while(gunMode == GunMode_Calibration) {
         buttons.Poll(1);
 
@@ -1758,7 +1766,7 @@ void ExecCalMode()
         }
         
         if((buttons.pressedReleased & (ExitPauseModeBtnMask | ExitPauseModeHoldBtnMask)) && !justBooted) {
-            Serial.println("Calibration cancelled");
+            Serial.printf("CalStage: %d\r\n", Cali_Verify+1);
             // Reapplying backed up data
             profileData[selectedProfile].topOffset = _topOffset;
             profileData[selectedProfile].bottomOffset = _bottomOffset;
@@ -1781,6 +1789,9 @@ void ExecCalMode()
             return;
         } else if(buttons.pressed == BtnMask_Trigger) {
             calStage++;
+            Serial.printf("CalStage: %d\r\n", calStage);
+            // make sure our messages go through, or else the HID reports eats UART.
+            Serial.flush();
             CaliMousePosMove(calStage);
             switch(calStage) {
                 case Cali_Init:
@@ -1814,7 +1825,7 @@ void ExecCalMode()
                   // Set Offset buffer
                   topOffset = mouseY;
                   // Move to bottom calibration point
-                  AbsMouse5.move(32768/2, 32767);
+                  AbsMouse5.move(32768/2, 32766);
                   break;
 
                 case Cali_Left:
@@ -1828,7 +1839,7 @@ void ExecCalMode()
                   // Set Offset buffer
                   leftOffset = mouseX;
                   // Move to right calibration point
-                  AbsMouse5.move(32767, 32768/2);
+                  AbsMouse5.move(32766, 32768/2);
                   break;
 
                 case Cali_Center:
@@ -1868,20 +1879,22 @@ void ExecCalMode()
                       // If it's good, move onto cali finish.
                       if(buttons.pressed == BtnMask_Trigger) {
                           calStage++;
-                          SetMode(GunMode_Run);
+                          // stay in Verification Mode, as the code outside of the Cali loop will catch us.
+                          break;
                       // Press A/B to restart cali for current profile
                       } else if(buttons.pressedReleased & ExitPauseModeHoldBtnMask) {
                           calStage = 0;
+                          Serial.printf("CalStage: %d\r\n", Cali_Init);
+                          Serial.flush();
                           // (re)set current values to factory defaults
                           profileData[selectedProfile].topOffset = 0, profileData[selectedProfile].bottomOffset = 0,
                           profileData[selectedProfile].leftOffset = 0, profileData[selectedProfile].rightOffset = 0;
                           profileData[selectedProfile].adjX = 512 << 2, profileData[selectedProfile].adjY = 384 << 2;
                           SetMode(GunMode_Calibration);
-                          delay(1);
                           AbsMouse5.move(32768/2, 32768/2);
                       // Press C/Home to exit wholesale without committing new cali values
                       } else if(buttons.pressedReleased & ExitPauseModeBtnMask && !justBooted) {
-                          Serial.println("Calibration cancelled");
+                          Serial.printf("CalStage: %d\r\n", Cali_Verify+1);
                           // Reapplying backed up data
                           profileData[selectedProfile].topOffset = _topOffset;
                           profileData[selectedProfile].bottomOffset = _bottomOffset;
@@ -1913,8 +1926,7 @@ void ExecCalMode()
         stateFlags |= StateFlag_SavePreferencesEn;
         SavePreferences();
     } else if(dockedCalibrating) {
-        Serial.print("UpdatedProf: ");
-        Serial.println(selectedProfile);
+        Serial.printf("UpdatedProf: %d\r\n", selectedProfile);
         Serial.println(profileData[selectedProfile].topOffset);
         Serial.println(profileData[selectedProfile].bottomOffset);
         Serial.println(profileData[selectedProfile].leftOffset);
@@ -1924,20 +1936,22 @@ void ExecCalMode()
         //Serial.println(profileData[selectedProfile].adjX);
         //Serial.println(profileData[selectedProfile].adjY);
         SetMode(GunMode_Docked);
+        dockedCalibrating = false;
     } else {
         SetMode(GunMode_Run);
     }
     #ifdef USES_RUMBLE
         if(SamcoPreferences::toggles.rumbleActive) {
-            digitalWrite(SamcoPreferences::pins.oRumble, true);
+            analogWrite(SamcoPreferences::pins.oRumble, SamcoPreferences::settings.rumbleIntensity);
             delay(80);
             digitalWrite(SamcoPreferences::pins.oRumble, false);
             delay(50);
-            digitalWrite(SamcoPreferences::pins.oRumble, true);
+            analogWrite(SamcoPreferences::pins.oRumble, SamcoPreferences::settings.rumbleIntensity);
             delay(125);
             digitalWrite(SamcoPreferences::pins.oRumble, false);
         }
     #endif // USES_RUMBLE
+    Serial.printf("CalStage: %d\r\n", Cali_Verify+1);
 }
 
 // Locking function moving from cali point to point
@@ -1960,7 +1974,7 @@ void CaliMousePosMove(uint8_t caseNumber)
           break;
         case Cali_Bottom:
           for(yPos = 0; yPos < 32767; yPos = yPos + 30) {
-              if(yPos > 32767-31) { yPos = 32767; }
+              if(yPos > 32767-31) { yPos = 32766; }
               AbsMouse5.move(32768/2, yPos);
           }
           delay(5);
@@ -1977,7 +1991,7 @@ void CaliMousePosMove(uint8_t caseNumber)
           break;
         case Cali_Right:
           for(xPos = 0; xPos < 32767; xPos = xPos + 30) {
-              if(xPos > 32767-31) { xPos = 32767; }
+              if(xPos > 32767-31) { xPos = 32766; }
               AbsMouse5.move(xPos, 32768/2);
           }
           delay(5);
@@ -2356,6 +2370,9 @@ void SerialProcessingDocked()
                         //Serial.print("Now calibrating selected profile: ");
                         //Serial.println(profileDesc[selectedProfile].profileLabel);
                         SetMode(GunMode_Calibration);
+                        // UGLY: just run the method if we're in initial boot
+                        // (assuming the user started their first cali from the app and not the trigger pull prompt)
+                        if(justBooted) { ExecCalMode(); }
                     }
                 }
                 break;
@@ -3061,25 +3078,100 @@ void SerialProcessing()
         case 'M':
           serialInput = Serial.read();                               // Read the second bit.
           switch(serialInput) {
-              case '1':
+              // input mode
+              case '0':
                 Serial.read();
                 serialInput = Serial.read();
-                if(serialInput > '0') {
-                    if(serialMode) {
-                        offscreenButtonSerial = true;
-                    } else {
-                        // eh, might be useful for Linux Supermodel users.
-                        offscreenButton = true;
-                        Serial.println("Setting offscreen button mode on!");
+                switch(serialInput) {
+                    // "hybrid" - just use the default m&kb mode
+                    case '2':
+                    // mouse & kb
+                    case '0':
+                      buttons.analogOutput = false;
+                      break;
+                    // gamepad
+                    case '1':
+                      buttons.analogOutput = true;
+                      Gamepad16.stickRight = (Serial.peek() == 'L') ? true: false;
+                      break;
+                }
+                AbsMouse5.releaseAll();
+                Keyboard.releaseAll();
+                Gamepad16.releaseAll();
+                #ifdef USES_DISPLAY
+                    if(!serialMode && gunMode == GunMode_Run) { OLED.ScreenModeChange(ExtDisplay::Screen_Normal, buttons.analogOutput); }
+                    else if(serialMode && gunMode == GunMode_Run &&
+                            OLED.serialDisplayType > ExtDisplay::ScreenSerial_None &&
+                            OLED.serialDisplayType < ExtDisplay::ScreenSerial_Both) {
+                        OLED.ScreenModeChange(ExtDisplay::Screen_Mamehook_Single, buttons.analogOutput);
                     }
-                } else {
-                    if(serialMode) { offscreenButtonSerial = false; }
-                    else {
-                        offscreenButton = false;
-                        Serial.println("Setting offscreen button mode off!");
-                    }
+                #endif // USES_DISPLAY
+                break;
+              // offscreen button mode
+              case '1':
+                Serial.read();                                         // nomf
+                serialInput = Serial.read();
+                switch(serialInput) {
+                    // cursor in bottom left - just use disabled
+                    case '1':
+                    // "true offscreen shot" mode - just use disabled for now
+                    case '3':
+                    // disabled
+                    case '0':
+                      if(serialMode) { offscreenButtonSerial = false; }
+                      else { offscreenButton = false; }
+                      // reset bindings for low button users if offscreen button was enabled earlier.
+                      if(SamcoPreferences::toggles.lowButtonMode) {
+                          LightgunButtons::ButtonDesc[BtnIdx_A].reportType = LightgunButtons::ReportType_Mouse;
+                          LightgunButtons::ButtonDesc[BtnIdx_A].reportCode = MOUSE_RIGHT;
+                          LightgunButtons::ButtonDesc[BtnIdx_B].reportType = LightgunButtons::ReportType_Mouse;
+                          LightgunButtons::ButtonDesc[BtnIdx_B].reportCode = MOUSE_MIDDLE;
+                      }
+                      break;
+                    // offscreen button
+                    case '2':
+                      if(serialMode) { offscreenButtonSerial = true; }
+                      // eh, might be useful for Linux Supermodel users.
+                      else { offscreenButton = true; }
+                      // remap bindings for low button users to make e.g. VCop 3 playable with 1 btn + pedal
+                      if(SamcoPreferences::toggles.lowButtonMode) {
+                          LightgunButtons::ButtonDesc[BtnIdx_A].reportType = LightgunButtons::ReportType_Mouse;
+                          LightgunButtons::ButtonDesc[BtnIdx_A].reportCode = MOUSE_BUTTON4;
+                          LightgunButtons::ButtonDesc[BtnIdx_B].reportType = LightgunButtons::ReportType_Mouse;
+                          LightgunButtons::ButtonDesc[BtnIdx_B].reportCode = MOUSE_BUTTON5;
+                      }
+                      break;
                 }
                 break;
+              // pedal functionality
+              case '2':
+                Serial.read();                                         // nomf
+                serialInput = Serial.read();
+                switch(serialInput) {
+                    // separate button (default to original binds)
+                    case '0':
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType = pedalOrigButtonType1;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode = pedalOrigButtonCode1;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType2 = pedalOrigButtonType2;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode2 = pedalOrigButtonCode2;
+                      break;
+                    // make reload button (mouse right)
+                    case '1':
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType = LightgunButtons::ReportType_Mouse;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode = MOUSE_RIGHT;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType2 = LightgunButtons::ReportType_Mouse;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode2 = MOUSE_RIGHT;
+                      break;
+                    // make middle mouse button (for VCop3 EZ mode)
+                    case '2':
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType = LightgunButtons::ReportType_Mouse;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode = MOUSE_MIDDLE;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType2 = LightgunButtons::ReportType_Mouse;
+                      LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode2 = MOUSE_MIDDLE;
+                      break;
+                }
+                break;
+              // aspect ratio correction
               case '3':
                 Serial.read();                                         // nomf
                 serialARcorrection = Serial.read() - '0';
@@ -3088,7 +3180,41 @@ void SerialProcessing()
                     else { Serial.println("Setting 4:3 correction off!"); }
                 }
                 break;
+              #ifdef USES_TEMP
+              // temp sensor disabling (why?)
+              case '4':
+                Serial.read();                                         // nomf
+                serialInput = Serial.read();
+                // TODO: implement
+                break;
+              #endif // USES_TEMP
+              // autoreload (TODO: maybe?)
+              case '5':
+                Serial.read();                                         // nomf
+                serialInput = Serial.read();
+                // TODO: implement?
+                break;
+              // rumble only mode (enable Rumble FF)
+              case '6':
+                Serial.read();                                         // nomf
+                serialInput = Serial.read();
+                switch(serialInput) {
+                    // disable
+                    case '0':
+                      if(SamcoPreferences::pins.sSolenoid == -1 && SamcoPreferences::pins.oSolenoid >= 0) { SamcoPreferences::toggles.solenoidActive = true; }
+                      if(SamcoPreferences::pins.oRumble >= 0) { SamcoPreferences::toggles.rumbleFF = false; }
+                      break;
+                    // enable
+                    case '1':
+                      if(SamcoPreferences::pins.sRumble == -1 && SamcoPreferences::pins.oRumble >= 0) { SamcoPreferences::toggles.rumbleActive = true; }
+                      if(SamcoPreferences::pins.sSolenoid == -1 && SamcoPreferences::pins.oSolenoid >= 0) { SamcoPreferences::toggles.solenoidActive = false; }
+                      if(SamcoPreferences::pins.oRumble >= 0) { SamcoPreferences::toggles.rumbleFF = true; }
+                      break;
+                }
+                OF_FFB.FFBShutdown();
+                break;
               #ifdef USES_SOLENOID
+              // solenoid automatic mode
               case '8':
                 Serial.read();                                         // Nomf the padding bit.
                 serialInput = Serial.read();                           // Read the next.
@@ -3183,6 +3309,16 @@ void SerialProcessing()
                   #endif // USES_SOLENOID
                   AbsMouse5.releaseAll();
                   Keyboard.releaseAll();
+                  LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType = pedalOrigButtonType1;
+                  LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode = pedalOrigButtonCode1;
+                  LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportType2 = pedalOrigButtonType2;
+                  LightgunButtons::ButtonDesc[BtnIdx_Pedal].reportCode2 = pedalOrigButtonCode2;
+                  if(SamcoPreferences::toggles.lowButtonMode) {
+                      LightgunButtons::ButtonDesc[BtnIdx_A].reportType = LightgunButtons::ReportType_Mouse;
+                      LightgunButtons::ButtonDesc[BtnIdx_A].reportCode = MOUSE_RIGHT;
+                      LightgunButtons::ButtonDesc[BtnIdx_B].reportType = LightgunButtons::ReportType_Mouse;
+                      LightgunButtons::ButtonDesc[BtnIdx_B].reportCode = MOUSE_MIDDLE;
+                  }
                   Serial.println("Received end serial pulse, releasing FF override.");
               }
               break;
@@ -3192,52 +3328,6 @@ void SerialProcessing()
         case 'X':
           serialInput = Serial.read();
           switch(serialInput) {
-              // Toggle Gamepad Output Mode
-              case 'A':
-                serialInput = Serial.read();
-                switch(serialInput) {
-                    case 'L':
-                      if(!buttons.analogOutput) {
-                          buttons.analogOutput = true;
-                          AbsMouse5.releaseAll();
-                          Keyboard.releaseAll();
-                          Serial.println("Switched to Analog Output mode!");
-                      }
-                      Gamepad16.stickRight = true;
-                      Serial.println("Setting camera to the Left Stick.");
-                      break;
-                    case 'R':
-                      if(!buttons.analogOutput) {
-                          buttons.analogOutput = true;
-                          AbsMouse5.releaseAll();
-                          Keyboard.releaseAll();
-                          Serial.println("Switched to Analog Output mode!");
-                      }
-                      Gamepad16.stickRight = false;
-                      Serial.println("Setting camera to the Right Stick.");
-                      break;
-                    default:
-                      buttons.analogOutput = !buttons.analogOutput;
-                      if(buttons.analogOutput) {
-                          AbsMouse5.releaseAll();
-                          Keyboard.releaseAll();
-                          Serial.println("Switched to Analog Output mode!");
-                      } else {
-                          Gamepad16.releaseAll();
-                          Keyboard.releaseAll();
-                          Serial.println("Switched to Mouse Output mode!");
-                      }
-                      break;
-                }
-                #ifdef USES_DISPLAY
-                    if(!serialMode && gunMode == GunMode_Run) { OLED.ScreenModeChange(ExtDisplay::Screen_Normal, buttons.analogOutput); }
-                    else if(serialMode && gunMode == GunMode_Run &&
-                            OLED.serialDisplayType > ExtDisplay::ScreenSerial_None &&
-                            OLED.serialDisplayType < ExtDisplay::ScreenSerial_Both) {
-                        OLED.ScreenModeChange(ExtDisplay::Screen_Mamehook_Single, buttons.analogOutput);
-                    }
-                #endif // USES_DISPLAY
-                break;
               // Set Autofire Interval Length
               case 'I':
                 serialInput = Serial.read();
@@ -3266,7 +3356,7 @@ void SerialProcessing()
               default:
                 Serial.println("SERIALREAD: Internal setting command detected, but no valid option found!");
                 Serial.println("Internally recognized commands are:");
-                Serial.println("A(nalog)[L/R] / I(nterval Autofire)2/3/4 / R(emap)1/2/3/4 / P(ause)");
+                Serial.println("I(nterval Autofire)2/3/4 / R(emap)1/2/3/4 / P(ause)");
                 break;
           }
           // End of 'X'
@@ -4781,20 +4871,21 @@ void UpdateBindings(bool offscreenEnable)
 
     // Updates button functions for low-button mode
     if(offscreenEnable) {
-        LightgunButtons::ButtonDesc[1].reportType2 = LightgunButtons::ReportType_Keyboard;
-        LightgunButtons::ButtonDesc[1].reportCode2 = playerStartBtn;
-        LightgunButtons::ButtonDesc[2].reportType2 = LightgunButtons::ReportType_Keyboard;
-        LightgunButtons::ButtonDesc[2].reportCode2 = playerSelectBtn;
-        LightgunButtons::ButtonDesc[3].reportCode = playerStartBtn;
-        LightgunButtons::ButtonDesc[4].reportCode = playerSelectBtn;
+        LightgunButtons::ButtonDesc[BtnIdx_A].reportType2 = LightgunButtons::ReportType_Keyboard;
+        LightgunButtons::ButtonDesc[BtnIdx_A].reportCode2 = playerStartBtn;
+        LightgunButtons::ButtonDesc[BtnIdx_B].reportType2 = LightgunButtons::ReportType_Keyboard;
+        LightgunButtons::ButtonDesc[BtnIdx_B].reportCode2 = playerSelectBtn;
     } else {
-        LightgunButtons::ButtonDesc[1].reportType2 = LightgunButtons::ReportType_Mouse;
-        LightgunButtons::ButtonDesc[1].reportCode2 = MOUSE_RIGHT;
-        LightgunButtons::ButtonDesc[2].reportType2 = LightgunButtons::ReportType_Mouse;
-        LightgunButtons::ButtonDesc[2].reportCode2 = MOUSE_MIDDLE;
-        LightgunButtons::ButtonDesc[3].reportCode = playerStartBtn;
-        LightgunButtons::ButtonDesc[4].reportCode = playerSelectBtn;
+        LightgunButtons::ButtonDesc[BtnIdx_A].reportType2 = LightgunButtons::ReportType_Mouse;
+        LightgunButtons::ButtonDesc[BtnIdx_A].reportCode2 = MOUSE_RIGHT;
+        LightgunButtons::ButtonDesc[BtnIdx_B].reportType2 = LightgunButtons::ReportType_Mouse;
+        LightgunButtons::ButtonDesc[BtnIdx_B].reportCode2 = MOUSE_MIDDLE;
     }
+    // update start/select button keyboard bindings
+    LightgunButtons::ButtonDesc[BtnIdx_Start].reportCode = playerStartBtn;
+    LightgunButtons::ButtonDesc[BtnIdx_Start].reportCode2 = playerStartBtn;
+    LightgunButtons::ButtonDesc[BtnIdx_Select].reportCode = playerSelectBtn;
+    LightgunButtons::ButtonDesc[BtnIdx_Select].reportCode2 = playerSelectBtn;
 }
 
 #ifdef DEBUG_SERIAL
